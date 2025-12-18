@@ -1,10 +1,26 @@
 # tracing-subscriber-reload-arcswap
 
-Lock-free reload support for `tracing-subscriber` layers and filters, using `arc-swap`.
+This crate exists because the `tracing-subscriber` maintainers asked that an `arc-swap`-based
+reload layer be split out into a separate crate rather than adding a new feature to
+`tracing-subscriber`.
 
-This is a pragmatic alternative to `tracing_subscriber::reload::Layer` that avoids acquiring an
-`RwLock` on the hot path of span/event processing. Reloads are serialized internally and still
-rebuild the callsite interest cache.
+Context:
+- Original `tracing-subscriber` PR/discussion: https://github.com/tokio-rs/tracing/pull/3438
+- Motivating issue: https://github.com/tokio-rs/tracing/issues/2658
+
+## What it is
+
+`tracing_subscriber_reload_arcswap::ArcSwapLayer` is intended as a pragmatic replacement for
+[`tracing_subscriber::reload::Layer`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/reload/struct.Layer.html).
+
+It provides the same core behavior:
+- wrap a `Layer` or per-layer `Filter`
+- update it at runtime (`reload`/`modify`)
+- rebuild the callsite interest/max-level cache after updates (so changes take effect promptly)
+
+The primary difference is implementation strategy:
+- `tracing_subscriber::reload::Layer` uses an `RwLock` (every span/event hits the lock on the read path)
+- this crate uses `arc-swap` for a lock-free read path (reload/modify are serialized; they’re expected to be rare)
 
 ## Usage
 
@@ -46,6 +62,21 @@ The multi-threaded benchmarks intentionally construct OS-thread parallelism (via
 `tokio::spawn_blocking`, and a Rayon pool) to exacerbate read-side synchronization contention. This
 is not representative of typical Tokio async request-handling on a small number of runtime worker
 threads.
+
+On an Apple M4 Pro (14 cores, 48GB; macOS 26.2; `rustc 1.92.0`), Criterion point estimates for the
+benchmarks that originally motivated this crate were:
+
+| Benchmark | Baseline (no reload) | `reload::Layer` (`RwLock`) | `ArcSwapLayer` (`ArcSwap`) |
+| --- | ---: | ---: | ---: |
+| `single_threaded` | 4.88 ns | 8.90 ns (1.82x) | 9.58 ns (1.96x) |
+| `multithreaded_16x1000` (`std::thread`) | 67.2 µs | 11.9 ms (177x) | 71.7 µs (1.07x) |
+| `tokio_spawn_blocking_16x1000` | 57.1 µs | 12.8 ms (223x) | 62.8 µs (1.10x) |
+| `rayon_16x1000` | 39.4 µs | 15.0 ms (380x) | 51.9 µs (1.32x) |
+
+These results show why the crate exists:
+- in “normal” single-threaded paths, `ArcSwapLayer` is in the same ballpark as `reload::Layer`
+- under high OS-thread parallelism (a setup that can happen in real services via `spawn_blocking`, Rayon, or other thread pools),
+  the `RwLock` read-side overhead can dominate even when you never reload — `ArcSwapLayer` avoids that contention
 
 ## Optional features
 
