@@ -7,7 +7,8 @@ reload layer be split out into a separate crate rather than adding a new feature
 TL;DR: a functionally-equivalent alternative to
 [`tracing_subscriber::reload::Layer`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/reload/struct.Layer.html)
 that is typically comparable and can be far faster under high OS-thread parallelism (e.g.
-`tokio::spawn_blocking`, Rayon, or other thread pools); see Benchmarks.
+`tokio::spawn_blocking`, Rayon, or other thread pools) (in certain cases up to ~280x faster!);
+see Benchmarks.
 
 Context:
 - Original `tracing-subscriber` PR/discussion: https://github.com/tokio-rs/tracing/pull/3438
