@@ -27,6 +27,21 @@ The primary difference is implementation strategy:
 - `tracing_subscriber::reload::Layer` uses an `RwLock` (every span/event hits the lock on the read path)
 - this crate uses `arc-swap` for a lock-free read path (reload/modify are serialized; they’re expected to be rare)
 
+## `L: Clone` caveat
+
+`ArcSwapLayer` implements `Layer` only when `L: Clone`. This is because `Layer::on_layer` requires
+mutable access, and with `ArcSwap` the safe way to update is to clone the current value, mutate it,
+and swap it back in.
+
+That clone happens only on `reload`/`modify` (when you actively change the layer), not on every
+span/event. So the clone cost is *not* in the hot path, and it’s usually insignificant compared to
+the benefit of removing the `RwLock` from the read path. For most use cases the cloned value is
+small (filters or lightweight layers) and reloads are infrequent.
+
+If cloning `L` is expensive or you expect frequent reloads, `tracing_subscriber::reload::Layer` may
+be a better fit. If you only need reloadable filtering, prefer wrapping the filter itself rather
+than a `Filtered` layer.
+
 ## Usage
 
 ```rust
