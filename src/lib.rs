@@ -9,6 +9,15 @@
 //! Reloading (swapping in a new `Layer`/`Filter`) is expected to be rare and is
 //! serialized internally, while reads are lock-free.
 //!
+//! ## Trait bounds
+//!
+//! - When wrapping a type used as a [`Layer`], `ArcSwapLayer` requires `L: Clone`
+//!   (because `Layer::on_layer` requires `&mut self`).
+//! - When wrapping a per-layer [`Filter`](tracing_subscriber::layer::Filter),
+//!   `ArcSwapLayer` does *not* require `L: Clone` for the read path or for
+//!   [`ArcSwapHandle::reload`]. However, [`ArcSwapHandle::modify`] requires
+//!   `L: Clone` because it applies changes by cloning and swapping the value.
+//!
 //! # When is this useful?
 //!
 //! In many common Tokio services (async request handling on a runtime with a
@@ -76,6 +85,13 @@ use tracing_subscriber::{Layer, layer};
 
 /// Wraps a `Layer` or per-layer `Filter` using `arc_swap::ArcSwap`, allowing it
 /// to be reloaded dynamically with a lock-free read path.
+///
+/// This type is intended as a replacement for `tracing_subscriber::reload::Layer`
+/// when read-side contention on the `RwLock` becomes a bottleneck.
+///
+/// Reloads/modifications rebuild the global callsite interest cache (via
+/// [`tracing_core::callsite::rebuild_interest_cache`]) so that changes take
+/// effect promptly.
 #[derive(Debug)]
 pub struct ArcSwapLayer<L, S> {
     inner: Arc<ArcSwap<L>>,
@@ -146,6 +162,10 @@ impl<L, S> ArcSwapLayer<L, S> {
     /// Wraps the given [`Layer`] or [`Filter`](tracing_subscriber::layer::Filter),
     /// returning an [`ArcSwapLayer`] and an [`ArcSwapHandle`] that allows the
     /// inner value to be modified at runtime.
+    ///
+    /// Note: the `S` type parameter is the `Subscriber` this layer/filter will
+    /// be used with. When using `tracing_subscriber::Registry` (directly or via
+    /// `registry().with(...)`), `S` is typically `tracing_subscriber::Registry`.
     pub fn new(inner: L) -> (Self, ArcSwapHandle<L, S>) {
         let this = Self {
             inner: Arc::new(ArcSwap::from_pointee(inner)),
@@ -175,6 +195,10 @@ impl<L, S> ArcSwapHandle<L, S> {
     /// [`Filtered`](tracing_subscriber::filter::Filtered) layer; use
     /// [`ArcSwapHandle::modify`] instead (see
     /// <https://github.com/tokio-rs/tracing/issues/1629>).
+    ///
+    /// This rebuilds the global callsite interest cache (and therefore updates
+    /// cached enablement and max-level hints) so the new value takes effect
+    /// promptly.
     pub fn reload(&self, new_value: impl Into<L>) -> Result<(), Error> {
         let inner = self.inner.upgrade().ok_or(Error {
             kind: ErrorKind::SubscriberGone,
@@ -201,6 +225,10 @@ impl<L, S> ArcSwapHandle<L, S> {
     ///
     /// This requires `L: Clone`, as modifications are applied by cloning the
     /// current value and swapping it in atomically.
+    ///
+    /// This rebuilds the global callsite interest cache (and therefore updates
+    /// cached enablement and max-level hints) so the modified value takes effect
+    /// promptly.
     pub fn modify(&self, f: impl FnOnce(&mut L)) -> Result<(), Error>
     where
         L: Clone,
