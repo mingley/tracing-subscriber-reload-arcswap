@@ -88,6 +88,11 @@ use tracing_subscriber::{Layer, layer};
 ///
 /// This type is intended as a replacement for `tracing_subscriber::reload::Layer`
 /// when read-side contention on the `RwLock` becomes a bottleneck.
+///
+/// If you only need to reload a filter applied with `.with_filter(...)`, prefer
+/// wrapping the filter itself (rather than wrapping the resulting
+/// [`Filtered`](tracing_subscriber::filter::Filtered) layer), as this type's
+/// [`Layer`] implementation requires `L: Clone`.
 #[derive(Debug)]
 pub struct ArcSwapLayer<L, S> {
     inner: Arc<ArcSwap<L>>,
@@ -97,12 +102,11 @@ pub struct ArcSwapLayer<L, S> {
 
 /// Allows reloading the state of an associated [`ArcSwapLayer`].
 ///
-/// All successful updates rebuild the global callsite interest cache (via
-/// [`tracing_core::callsite::rebuild_interest_cache`]) so that cached enablement
-/// and max-level hints are recomputed.
+/// Use this handle to swap in a new value (`reload`) or to apply a change to the
+/// current value (`modify`).
 ///
-/// With the `tracing-log` feature enabled, updates also synchronize `log`'s
-/// max-level.
+/// Note: if the associated layer has been dropped, operations will return an
+/// error.
 #[derive(Debug)]
 pub struct ArcSwapHandle<L, S> {
     inner: Weak<ArcSwap<L>>,
@@ -111,6 +115,9 @@ pub struct ArcSwapHandle<L, S> {
 }
 
 /// Indicates that an error occurred when reloading a layer.
+///
+/// This typically means either the associated layer was dropped, or the internal
+/// update lock was poisoned by a panic during a previous update.
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
@@ -169,6 +176,9 @@ impl<L, S> ArcSwapLayer<L, S> {
     /// Note: the `S` type parameter is the `Subscriber` this layer/filter will
     /// be used with. When using `tracing_subscriber::Registry` (directly or via
     /// `registry().with(...)`), `S` is typically `tracing_subscriber::Registry`.
+    ///
+    /// The returned handle holds a `Weak` reference; if the layer is dropped,
+    /// handle operations will fail with an error.
     pub fn new(inner: L) -> (Self, ArcSwapHandle<L, S>) {
         let this = Self {
             inner: Arc::new(ArcSwap::from_pointee(inner)),
@@ -181,6 +191,8 @@ impl<L, S> ArcSwapLayer<L, S> {
 
     /// Returns an [`ArcSwapHandle`] that can be used to reload the wrapped
     /// value.
+    ///
+    /// Handles can be cloned cheaply.
     pub fn handle(&self) -> ArcSwapHandle<L, S> {
         ArcSwapHandle {
             inner: Arc::downgrade(&self.inner),
@@ -191,13 +203,14 @@ impl<L, S> ArcSwapLayer<L, S> {
 }
 
 impl<L, S> ArcSwapHandle<L, S> {
-    /// Replace the current [`Layer`] or [`Filter`](tracing_subscriber::layer::Filter)
-    /// with the provided `new_value`.
+    /// Atomically replace the current value with `new_value`.
     ///
-    /// `ArcSwapHandle::reload` cannot be used with the
-    /// [`Filtered`](tracing_subscriber::filter::Filtered) layer; use
-    /// [`ArcSwapHandle::modify`] instead (see
-    /// <https://github.com/tokio-rs/tracing/issues/1629>).
+    /// After swapping, this rebuilds the global callsite interest cache (via
+    /// [`tracing_core::callsite::rebuild_interest_cache`]) so cached enablement
+    /// and max-level hints are recomputed.
+    ///
+    /// With the `tracing-log` feature enabled, this also synchronizes `log`'s
+    /// max-level.
     pub fn reload(&self, new_value: impl Into<L>) -> Result<(), Error> {
         let inner = self.inner.upgrade().ok_or(Error {
             kind: ErrorKind::SubscriberGone,
@@ -219,11 +232,18 @@ impl<L, S> ArcSwapHandle<L, S> {
         Ok(())
     }
 
-    /// Invokes a closure with a mutable reference to the current layer or
-    /// filter, allowing it to be modified in place.
+    /// Applies an update by cloning the current value, mutating it, and swapping
+    /// it back in.
     ///
-    /// This requires `L: Clone`, as modifications are applied by cloning the
-    /// current value and swapping it in atomically.
+    /// This is useful when you can't (or don't want to) construct a brand new
+    /// `L` just to apply a small change.
+    ///
+    /// After swapping, this rebuilds the global callsite interest cache (via
+    /// [`tracing_core::callsite::rebuild_interest_cache`]) so cached enablement
+    /// and max-level hints are recomputed.
+    ///
+    /// With the `tracing-log` feature enabled, this also synchronizes `log`'s
+    /// max-level.
     pub fn modify(&self, f: impl FnOnce(&mut L)) -> Result<(), Error>
     where
         L: Clone,
@@ -252,8 +272,10 @@ impl<L, S> ArcSwapHandle<L, S> {
         Ok(())
     }
 
-    /// Returns a clone of the current value if it still exists. Otherwise, if
-    /// the subscriber has been dropped, returns `None`.
+    /// Returns a clone of the current value if the associated layer still
+    /// exists.
+    ///
+    /// If the layer has been dropped, returns `None`.
     pub fn clone_current(&self) -> Option<L>
     where
         L: Clone,
@@ -261,8 +283,12 @@ impl<L, S> ArcSwapHandle<L, S> {
         self.with_current(L::clone).ok()
     }
 
-    /// Invokes a closure with a borrowed reference to the current value,
-    /// returning the result (or an error if the subscriber no longer exists).
+    /// Runs `f` against the current value, without cloning it.
+    ///
+    /// This is a convenience for querying state (e.g. formatting a debug view or
+    /// extracting some field) without forcing `L: Clone`.
+    ///
+    /// Returns an error if the associated layer has been dropped.
     pub fn with_current<T>(&self, f: impl FnOnce(&L) -> T) -> Result<T, Error> {
         let inner = self.inner.upgrade().ok_or(Error {
             kind: ErrorKind::SubscriberGone,
