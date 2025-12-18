@@ -69,11 +69,10 @@ use std::{
     sync::{Arc, Weak},
 };
 use tracing_core::{
-    callsite, span,
+    Dispatch, Event, LevelFilter, Metadata, callsite, span,
     subscriber::{Interest, Subscriber},
-    Dispatch, Event, LevelFilter, Metadata,
 };
-use tracing_subscriber::{layer, Layer};
+use tracing_subscriber::{Layer, layer};
 
 /// Wraps a `Layer` or per-layer `Filter` using `arc_swap::ArcSwap`, allowing it
 /// to be reloaded dynamically with a lock-free read path.

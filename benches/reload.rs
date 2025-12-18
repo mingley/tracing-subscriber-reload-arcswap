@@ -1,12 +1,12 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rayon::prelude::*;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
-use tracing::{dispatcher::Dispatch, span, Event, Id, Metadata};
+use tracing::{Event, Id, Metadata, dispatcher::Dispatch, span};
 use tracing_subscriber::{filter::LevelFilter, prelude::*, reload};
 use tracing_subscriber_reload_arcswap::ArcSwapLayer;
 
