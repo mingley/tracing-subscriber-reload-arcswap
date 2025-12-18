@@ -1,0 +1,36 @@
+[package]
+name = "tracing-subscriber-reload-arcswap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65.0"
+license = "MIT"
+description = "Lock-free reload layer for tracing-subscriber using ArcSwap."
+readme = "README.md"
+repository = "https://github.com/mingley/tracing-subscriber-reload-arcswap"
+keywords = ["tracing", "logging", "subscriber", "reload", "arcswap"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+
+[dependencies]
+arc-swap = "1.7"
+tracing-core = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["std", "registry"] }
+tracing-log = { version = "0.2.0", optional = true, default-features = false, features = ["log-tracer", "std"] }
+
+[features]
+default = []
+tracing-log = ["dep:tracing-log"]
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+rayon = "1.10"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["std", "fmt", "registry"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "reload"
+harness = false
