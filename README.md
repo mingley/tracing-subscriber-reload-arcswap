@@ -71,12 +71,12 @@ threads.
 On an Apple M4 Pro (14 cores, 48GB; macOS 26.2; `rustc 1.92.0`), Criterion point estimates for the
 benchmarks that originally motivated this crate were:
 
-| Benchmark | Baseline (no reload) | `reload::Layer` (`RwLock`) | `ArcSwapLayer` (`ArcSwap`) |
-| --- | ---: | ---: | ---: |
-| `single_threaded` | 4.88 ns | 8.90 ns (1.82x) | 9.58 ns (1.96x) |
-| `multithreaded_16x1000` (`std::thread`) | 67.2 µs | 11.9 ms (177x) | 71.7 µs (1.07x) |
-| `tokio_spawn_blocking_16x1000` | 57.1 µs | 12.8 ms (223x) | 62.8 µs (1.10x) |
-| `rayon_16x1000` | 39.4 µs | 15.0 ms (380x) | 51.9 µs (1.32x) |
+| Benchmark | Baseline (no reload) | `reload::Layer` (`RwLock`) | `ArcSwapLayer` (`ArcSwap`) | `ArcSwapLayer` vs `reload::Layer` |
+| --- | ---: | ---: | ---: | ---: |
+| `single_threaded` | 4.88 ns | 8.90 ns (1.82x) | 9.58 ns (1.96x) | 0.93x (slower) |
+| `multithreaded_16x1000` (`std::thread`) | 67.2 µs | 11.9 ms (177x) | 71.7 µs (1.07x) | 166x |
+| `tokio_spawn_blocking_16x1000` | 57.1 µs | 12.8 ms (223x) | 62.8 µs (1.10x) | 204x |
+| `rayon_16x1000` | 39.4 µs | 15.0 ms (380x) | 51.9 µs (1.32x) | 289x |
 
 These results show why the crate exists:
 - in “normal” single-threaded paths, `ArcSwapLayer` is in the same ballpark as `reload::Layer`
