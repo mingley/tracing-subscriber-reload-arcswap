@@ -6,7 +6,7 @@ rust-version = "1.65.0"
 license = "MIT"
 description = "Lock-free reload layer for tracing-subscriber using ArcSwap."
 readme = "README.md"
-repository = "https://github.com/mingley/tracing-subscriber-reload-arcswap"
+repository = "https://github.com/mikasd/tracing-subscriber-reload-arcswap"
 keywords = ["tracing", "logging", "subscriber", "reload", "arcswap"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 
