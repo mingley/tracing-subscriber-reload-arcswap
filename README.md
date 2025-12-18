@@ -6,7 +6,7 @@ reload layer be split out into a separate crate rather than adding a new feature
 
 Context:
 - Original `tracing-subscriber` PR/discussion: https://github.com/tokio-rs/tracing/pull/3438
-- Motivating issue: https://github.com/tokio-rs/tracing/issues/2658
+- Motivating issue (this crate addresses it): https://github.com/tokio-rs/tracing/issues/2658
 
 ## What it is
 
