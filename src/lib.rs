@@ -88,10 +88,6 @@ use tracing_subscriber::{Layer, layer};
 ///
 /// This type is intended as a replacement for `tracing_subscriber::reload::Layer`
 /// when read-side contention on the `RwLock` becomes a bottleneck.
-///
-/// Reloads/modifications rebuild the global callsite interest cache (via
-/// [`tracing_core::callsite::rebuild_interest_cache`]) so that changes take
-/// effect promptly.
 #[derive(Debug)]
 pub struct ArcSwapLayer<L, S> {
     inner: Arc<ArcSwap<L>>,
@@ -100,6 +96,13 @@ pub struct ArcSwapLayer<L, S> {
 }
 
 /// Allows reloading the state of an associated [`ArcSwapLayer`].
+///
+/// All successful updates rebuild the global callsite interest cache (via
+/// [`tracing_core::callsite::rebuild_interest_cache`]) so that cached enablement
+/// and max-level hints are recomputed.
+///
+/// With the `tracing-log` feature enabled, updates also synchronize `log`'s
+/// max-level.
 #[derive(Debug)]
 pub struct ArcSwapHandle<L, S> {
     inner: Weak<ArcSwap<L>>,
@@ -195,10 +198,6 @@ impl<L, S> ArcSwapHandle<L, S> {
     /// [`Filtered`](tracing_subscriber::filter::Filtered) layer; use
     /// [`ArcSwapHandle::modify`] instead (see
     /// <https://github.com/tokio-rs/tracing/issues/1629>).
-    ///
-    /// This rebuilds the global callsite interest cache (and therefore updates
-    /// cached enablement and max-level hints) so the new value takes effect
-    /// promptly.
     pub fn reload(&self, new_value: impl Into<L>) -> Result<(), Error> {
         let inner = self.inner.upgrade().ok_or(Error {
             kind: ErrorKind::SubscriberGone,
@@ -225,10 +224,6 @@ impl<L, S> ArcSwapHandle<L, S> {
     ///
     /// This requires `L: Clone`, as modifications are applied by cloning the
     /// current value and swapping it in atomically.
-    ///
-    /// This rebuilds the global callsite interest cache (and therefore updates
-    /// cached enablement and max-level hints) so the modified value takes effect
-    /// promptly.
     pub fn modify(&self, f: impl FnOnce(&mut L)) -> Result<(), Error>
     where
         L: Clone,
