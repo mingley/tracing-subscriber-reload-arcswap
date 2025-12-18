@@ -3,6 +3,7 @@ name = "tracing-subscriber-reload-arcswap"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85.0"
+authors = ["Michael Ingley <michael.ingley@gmail.com>"]
 license = "MIT"
 description = "Lock-free reload layer for tracing-subscriber using ArcSwap."
 readme = "README.md"

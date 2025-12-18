@@ -54,3 +54,7 @@ threads.
 ## References
 
 - `tokio-rs/tracing` issue: https://github.com/tokio-rs/tracing/issues/2658
+
+## Author
+
+Michael Ingley <michael.ingley@gmail.com>
