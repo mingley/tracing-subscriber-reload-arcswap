@@ -4,9 +4,9 @@ This crate exists because the `tracing-subscriber` maintainers asked that an `ar
 reload layer be split out into a separate crate rather than adding a new feature to
 `tracing-subscriber`.
 
-TL;DR: a functionally-equivalent, drop-in alternative to
+TL;DR: a functionally-equivalent alternative to
 [`tracing_subscriber::reload::Layer`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/reload/struct.Layer.html)
-that is typically comparable and can be 8x+ faster under high OS-thread parallelism (e.g.
+that is typically comparable and can be far faster under high OS-thread parallelism (e.g.
 `tokio::spawn_blocking`, Rayon, or other thread pools); see Benchmarks.
 
 Context:
@@ -26,6 +26,8 @@ It provides the same core behavior:
 The primary difference is implementation strategy:
 - `tracing_subscriber::reload::Layer` uses an `RwLock` (every span/event hits the lock on the read path)
 - this crate uses `arc-swap` for a lock-free read path (reload/modify are serialized; they’re expected to be rare)
+
+In practice, it is a drop-in replacement for reloadable filters and for layers that are `Clone`.
 
 ## `L: Clone` caveat
 
