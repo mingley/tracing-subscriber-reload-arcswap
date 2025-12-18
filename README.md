@@ -4,6 +4,11 @@ This crate exists because the `tracing-subscriber` maintainers asked that an `ar
 reload layer be split out into a separate crate rather than adding a new feature to
 `tracing-subscriber`.
 
+TL;DR: a functionally-equivalent, drop-in alternative to
+[`tracing_subscriber::reload::Layer`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/reload/struct.Layer.html)
+that is typically comparable and can be 8x+ faster under high OS-thread parallelism (e.g.
+`tokio::spawn_blocking`, Rayon, or other thread pools); see Benchmarks.
+
 Context:
 - Original `tracing-subscriber` PR/discussion: https://github.com/tokio-rs/tracing/pull/3438
 - Motivating issue (this crate addresses it): https://github.com/tokio-rs/tracing/issues/2658

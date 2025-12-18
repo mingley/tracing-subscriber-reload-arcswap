@@ -2,6 +2,7 @@
 name = "tracing-subscriber-reload-arcswap"
 version = "0.1.0"
 edition = "2024"
+# Rust 1.85 is the first stable release that supports the 2024 edition.
 rust-version = "1.85.0"
 authors = ["Michael Ingley <michael.ingley@gmail.com>"]
 license = "MIT"
