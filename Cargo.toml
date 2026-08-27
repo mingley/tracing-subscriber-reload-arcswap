@@ -24,7 +24,7 @@ default = []
 tracing-log = ["dep:tracing-log"]
 
 [dev-dependencies]
-criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.7", default-features = false }
 rayon = "1.11"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
