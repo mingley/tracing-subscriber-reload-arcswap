@@ -72,16 +72,22 @@
 //! downcasting support.
 
 use arc_swap::ArcSwap;
-use core::marker::PhantomData;
 use std::{
     error, fmt,
-    sync::{Arc, Weak},
+    marker::PhantomData,
+    sync::{Arc, Mutex, Weak},
 };
 use tracing_core::{
     Dispatch, Event, LevelFilter, Metadata, callsite, span,
     subscriber::{Interest, Subscriber},
 };
 use tracing_subscriber::{Layer, layer};
+
+#[derive(Debug)]
+struct Shared<L> {
+    value: ArcSwap<L>,
+    modify_lock: Mutex<()>,
+}
 
 /// Wraps a `Layer` or per-layer `Filter` using `arc_swap::ArcSwap`, allowing it
 /// to be reloaded dynamically with a lock-free read path.
@@ -95,8 +101,7 @@ use tracing_subscriber::{Layer, layer};
 /// [`Layer`] implementation requires `L: Clone`.
 #[derive(Debug)]
 pub struct ArcSwapLayer<L, S> {
-    inner: Arc<ArcSwap<L>>,
-    modify_lock: Arc<std::sync::Mutex<()>>,
+    inner: Arc<Shared<L>>,
     _s: PhantomData<fn(S)>,
 }
 
@@ -109,8 +114,7 @@ pub struct ArcSwapLayer<L, S> {
 /// error.
 #[derive(Debug)]
 pub struct ArcSwapHandle<L, S> {
-    inner: Weak<ArcSwap<L>>,
-    modify_lock: Weak<std::sync::Mutex<()>>,
+    inner: Weak<Shared<L>>,
     _s: PhantomData<fn(S)>,
 }
 
@@ -130,10 +134,28 @@ enum ErrorKind {
 }
 
 impl Error {
+    fn subscriber_gone() -> Self {
+        Self {
+            kind: ErrorKind::SubscriberGone,
+        }
+    }
+
     fn poisoned() -> Self {
         Self {
             kind: ErrorKind::Poisoned,
         }
+    }
+
+    /// Returns `true` if this error occurred because the update lock was
+    /// poisoned by a panic on another thread.
+    pub fn is_poisoned(&self) -> bool {
+        matches!(self.kind, ErrorKind::Poisoned)
+    }
+
+    /// Returns `true` if this error occurred because the associated
+    /// [`ArcSwapLayer`] was dropped.
+    pub fn is_dropped(&self) -> bool {
+        matches!(self.kind, ErrorKind::SubscriberGone)
     }
 }
 
@@ -148,11 +170,23 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
+fn rebuild_after_update() {
+    callsite::rebuild_interest_cache();
+
+    // If the `log` crate compatibility feature is in use, set `log`'s max
+    // level as well, in case the max `tracing` level changed. Do this *after*
+    // rebuilding the interest cache, as that's when the `tracing` max level
+    // filter is re-computed.
+    #[cfg(feature = "tracing-log")]
+    tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
+        &tracing_subscriber::filter::LevelFilter::current(),
+    ));
+}
+
 impl<L, S> Clone for ArcSwapHandle<L, S> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            modify_lock: self.modify_lock.clone(),
             _s: PhantomData,
         }
     }
@@ -162,7 +196,6 @@ impl<L, S> Clone for ArcSwapLayer<L, S> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            modify_lock: self.modify_lock.clone(),
             _s: PhantomData,
         }
     }
@@ -181,8 +214,10 @@ impl<L, S> ArcSwapLayer<L, S> {
     /// handle operations will fail with an error.
     pub fn new(inner: L) -> (Self, ArcSwapHandle<L, S>) {
         let this = Self {
-            inner: Arc::new(ArcSwap::from_pointee(inner)),
-            modify_lock: Arc::new(std::sync::Mutex::new(())),
+            inner: Arc::new(Shared {
+                value: ArcSwap::from_pointee(inner),
+                modify_lock: Mutex::new(()),
+            }),
             _s: PhantomData,
         };
         let handle = this.handle();
@@ -196,13 +231,16 @@ impl<L, S> ArcSwapLayer<L, S> {
     pub fn handle(&self) -> ArcSwapHandle<L, S> {
         ArcSwapHandle {
             inner: Arc::downgrade(&self.inner),
-            modify_lock: Arc::downgrade(&self.modify_lock),
             _s: PhantomData,
         }
     }
 }
 
 impl<L, S> ArcSwapHandle<L, S> {
+    fn upgrade(&self) -> Result<Arc<Shared<L>>, Error> {
+        self.inner.upgrade().ok_or_else(Error::subscriber_gone)
+    }
+
     /// Atomically replace the current value with `new_value`.
     ///
     /// After swapping, this rebuilds the global callsite interest cache (via
@@ -212,23 +250,14 @@ impl<L, S> ArcSwapHandle<L, S> {
     /// With the `tracing-log` feature enabled, this also synchronizes `log`'s
     /// max-level.
     pub fn reload(&self, new_value: impl Into<L>) -> Result<(), Error> {
-        let inner = self.inner.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
-        let modify_lock = self.modify_lock.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
+        let shared = self.upgrade()?;
 
-        let _guard = modify_lock.lock().map_err(|_| Error::poisoned())?;
-        inner.store(Arc::new(new_value.into()));
+        {
+            let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
+            shared.value.store(Arc::new(new_value.into()));
+        }
 
-        callsite::rebuild_interest_cache();
-
-        #[cfg(feature = "tracing-log")]
-        tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
-            &tracing_subscriber::filter::LevelFilter::current(),
-        ));
-
+        rebuild_after_update();
         Ok(())
     }
 
@@ -248,27 +277,17 @@ impl<L, S> ArcSwapHandle<L, S> {
     where
         L: Clone,
     {
-        let inner = self.inner.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
-        let modify_lock = self.modify_lock.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
+        let shared = self.upgrade()?;
 
-        let _guard = modify_lock.lock().map_err(|_| Error::poisoned())?;
+        {
+            let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
+            let current = shared.value.load_full();
+            let mut next = (*current).clone();
+            f(&mut next);
+            shared.value.store(Arc::new(next));
+        }
 
-        let current = inner.load_full();
-        let mut next = (*current).clone();
-        f(&mut next);
-        inner.store(Arc::new(next));
-
-        callsite::rebuild_interest_cache();
-
-        #[cfg(feature = "tracing-log")]
-        tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
-            &tracing_subscriber::filter::LevelFilter::current(),
-        ));
-
+        rebuild_after_update();
         Ok(())
     }
 
@@ -290,10 +309,8 @@ impl<L, S> ArcSwapHandle<L, S> {
     ///
     /// Returns an error if the associated layer has been dropped.
     pub fn with_current<T>(&self, f: impl FnOnce(&L) -> T) -> Result<T, Error> {
-        let inner = self.inner.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
-        let current = inner.load();
+        let shared = self.upgrade()?;
+        let current = shared.value.load();
         Ok(f(current.as_ref()))
     }
 }
@@ -304,11 +321,11 @@ where
     S: Subscriber,
 {
     fn on_register_dispatch(&self, subscriber: &Dispatch) {
-        self.inner.load().on_register_dispatch(subscriber);
+        self.inner.value.load().on_register_dispatch(subscriber);
     }
 
     fn on_layer(&mut self, subscriber: &mut S) {
-        let _guard = match self.modify_lock.lock() {
+        let _guard = match self.inner.modify_lock.lock() {
             Ok(g) => g,
             Err(_) => {
                 if std::thread::panicking() {
@@ -318,70 +335,70 @@ where
             }
         };
 
-        let current = self.inner.load_full();
+        let current = self.inner.value.load_full();
         let mut next = (*current).clone();
         next.on_layer(subscriber);
-        self.inner.store(Arc::new(next));
+        self.inner.value.store(Arc::new(next));
     }
 
     #[inline]
     fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
-        self.inner.load().register_callsite(metadata)
+        self.inner.value.load().register_callsite(metadata)
     }
 
     #[inline]
     fn enabled(&self, metadata: &Metadata<'_>, ctx: layer::Context<'_, S>) -> bool {
-        self.inner.load().enabled(metadata, ctx)
+        self.inner.value.load().enabled(metadata, ctx)
     }
 
     #[inline]
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_new_span(attrs, id, ctx)
+        self.inner.value.load().on_new_span(attrs, id, ctx)
     }
 
     #[inline]
     fn on_record(&self, span: &span::Id, values: &span::Record<'_>, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_record(span, values, ctx)
+        self.inner.value.load().on_record(span, values, ctx)
     }
 
     #[inline]
     fn on_follows_from(&self, span: &span::Id, follows: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_follows_from(span, follows, ctx)
+        self.inner.value.load().on_follows_from(span, follows, ctx)
     }
 
     #[inline]
     fn event_enabled(&self, event: &Event<'_>, ctx: layer::Context<'_, S>) -> bool {
-        self.inner.load().event_enabled(event, ctx)
+        self.inner.value.load().event_enabled(event, ctx)
     }
 
     #[inline]
     fn on_event(&self, event: &Event<'_>, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_event(event, ctx)
+        self.inner.value.load().on_event(event, ctx)
     }
 
     #[inline]
     fn on_enter(&self, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_enter(id, ctx)
+        self.inner.value.load().on_enter(id, ctx)
     }
 
     #[inline]
     fn on_exit(&self, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_exit(id, ctx)
+        self.inner.value.load().on_exit(id, ctx)
     }
 
     #[inline]
     fn on_close(&self, id: span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_close(id, ctx)
+        self.inner.value.load().on_close(id, ctx)
     }
 
     #[inline]
     fn on_id_change(&self, old: &span::Id, new: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_id_change(old, new, ctx)
+        self.inner.value.load().on_id_change(old, new, ctx)
     }
 
     #[inline]
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        self.inner.load().max_level_hint()
+        self.inner.value.load().max_level_hint()
     }
 }
 
@@ -392,41 +409,41 @@ where
 {
     #[inline]
     fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {
-        self.inner.load().callsite_enabled(metadata)
+        self.inner.value.load().callsite_enabled(metadata)
     }
 
     #[inline]
     fn enabled(&self, metadata: &Metadata<'_>, ctx: &layer::Context<'_, S>) -> bool {
-        self.inner.load().enabled(metadata, ctx)
+        self.inner.value.load().enabled(metadata, ctx)
     }
 
     #[inline]
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_new_span(attrs, id, ctx)
+        self.inner.value.load().on_new_span(attrs, id, ctx)
     }
 
     #[inline]
     fn on_record(&self, span: &span::Id, values: &span::Record<'_>, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_record(span, values, ctx)
+        self.inner.value.load().on_record(span, values, ctx)
     }
 
     #[inline]
     fn on_enter(&self, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_enter(id, ctx)
+        self.inner.value.load().on_enter(id, ctx)
     }
 
     #[inline]
     fn on_exit(&self, id: &span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_exit(id, ctx)
+        self.inner.value.load().on_exit(id, ctx)
     }
 
     #[inline]
     fn on_close(&self, id: span::Id, ctx: layer::Context<'_, S>) {
-        self.inner.load().on_close(id, ctx)
+        self.inner.value.load().on_close(id, ctx)
     }
 
     #[inline]
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        self.inner.load().max_level_hint()
+        self.inner.value.load().max_level_hint()
     }
 }

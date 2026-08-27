@@ -36,10 +36,11 @@ In practice, it is a drop-in replacement for reloadable filters and for layers t
 mutable access, and with `ArcSwap` the safe way to update is to clone the current value, mutate it,
 and swap it back in.
 
-That clone happens only on `reload`/`modify` (when you actively change the layer), not on every
-span/event. So the clone cost is *not* in the hot path, and it’s usually insignificant compared to
-the benefit of removing the `RwLock` from the read path. For most use cases the cloned value is
-small (filters or lightweight layers) and reloads are infrequent.
+That clone happens when the layer is attached (`Layer::on_layer`) and on `reload`/`modify` (when
+you actively change the layer), not on every span/event. So the clone cost is *not* in the hot
+path, and it’s usually insignificant compared to the benefit of removing the `RwLock` from the
+read path. For most use cases the cloned value is small (filters or lightweight layers) and
+reloads are infrequent.
 
 If cloning `L` is expensive or you expect frequent reloads, `tracing_subscriber::reload::Layer` may
 be a better fit. If you only need reloadable filtering, prefer wrapping the filter itself rather

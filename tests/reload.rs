@@ -100,3 +100,87 @@ fn reload_updates_filter_behavior() {
         "output was: {output}"
     );
 }
+
+#[test]
+fn modify_updates_filter_behavior() {
+    let (reloadable, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+    let buf = SharedBuf::default();
+
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(buf.clone())
+            .with_filter(reloadable),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!("info message");
+        tracing::debug!("debug message");
+
+        handle
+            .modify(|filter| *filter = tracing_subscriber::filter::LevelFilter::DEBUG)
+            .unwrap();
+
+        tracing::debug!("debug message after modify");
+    });
+
+    let output = buf.as_string();
+    assert!(output.contains("info message"), "output was: {output}");
+    assert!(!output.contains("debug message\n"), "output was: {output}");
+    assert!(
+        output.contains("debug message after modify"),
+        "output was: {output}"
+    );
+}
+
+#[test]
+fn clone_current_and_with_current() {
+    let (layer, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+    let cloned = handle.clone();
+
+    assert_eq!(
+        handle.clone_current(),
+        Some(tracing_subscriber::filter::LevelFilter::INFO)
+    );
+    assert_eq!(
+        handle
+            .with_current(|current| *current)
+            .expect("layer is still alive"),
+        tracing_subscriber::filter::LevelFilter::INFO
+    );
+
+    handle
+        .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
+        .unwrap();
+    assert_eq!(
+        cloned.clone_current(),
+        Some(tracing_subscriber::filter::LevelFilter::DEBUG)
+    );
+
+    drop(layer);
+    assert_eq!(handle.clone_current(), None);
+
+    let err = handle
+        .with_current(|current| *current)
+        .expect_err("dropped layer should fail");
+    assert!(err.is_dropped(), "{err:?}");
+    assert!(!err.is_poisoned(), "{err:?}");
+    assert_eq!(err.to_string(), "subscriber is gone");
+}
+
+#[test]
+fn reload_after_layer_drop_is_subscriber_gone() {
+    let (layer, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+    drop(layer);
+
+    let err = handle
+        .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
+        .expect_err("reload after drop should fail");
+    assert!(err.is_dropped(), "{err:?}");
+    assert!(!err.is_poisoned(), "{err:?}");
+    assert_eq!(err.to_string(), "subscriber is gone");
+}
