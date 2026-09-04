@@ -134,10 +134,30 @@ enum ErrorKind {
 }
 
 impl Error {
+    fn subscriber_gone() -> Self {
+        Self {
+            kind: ErrorKind::SubscriberGone,
+        }
+    }
+
     fn poisoned() -> Self {
         Self {
             kind: ErrorKind::Poisoned,
         }
+    }
+
+    /// Returns `true` if this error occurred because the update lock was
+    /// poisoned by a panic on another thread.
+    #[inline]
+    pub fn is_poisoned(&self) -> bool {
+        matches!(self.kind, ErrorKind::Poisoned)
+    }
+
+    /// Returns `true` if this error occurred because the associated
+    /// [`ArcSwapLayer`] was dropped.
+    #[inline]
+    pub fn is_dropped(&self) -> bool {
+        matches!(self.kind, ErrorKind::SubscriberGone)
     }
 }
 
@@ -151,6 +171,15 @@ impl fmt::Display for Error {
 }
 
 impl error::Error for Error {}
+
+fn rebuild_after_update() {
+    callsite::rebuild_interest_cache();
+
+    #[cfg(feature = "tracing-log")]
+    tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
+        &tracing_subscriber::filter::LevelFilter::current(),
+    ));
+}
 
 impl<L, S> Clone for ArcSwapHandle<L, S> {
     #[inline]
@@ -215,6 +244,11 @@ impl<L, S> ArcSwapLayer<L, S> {
 }
 
 impl<L, S> ArcSwapHandle<L, S> {
+    #[inline]
+    fn upgrade(&self) -> Result<Arc<Shared<L>>, Error> {
+        self.shared.upgrade().ok_or_else(Error::subscriber_gone)
+    }
+
     /// Atomically replace the current value with `new_value`.
     ///
     /// After swapping, this rebuilds the global callsite interest cache (via
@@ -224,19 +258,14 @@ impl<L, S> ArcSwapHandle<L, S> {
     /// With the `tracing-log` feature enabled, this also synchronizes `log`'s
     /// max-level.
     pub fn reload(&self, new_value: impl Into<L>) -> Result<(), Error> {
-        let shared = self.shared.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
+        let shared = self.upgrade()?;
 
-        let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
-        shared.inner.store(Arc::new(new_value.into()));
+        {
+            let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
+            shared.inner.store(Arc::new(new_value.into()));
+        }
 
-        callsite::rebuild_interest_cache();
-
-        #[cfg(feature = "tracing-log")]
-        tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
-            &tracing_subscriber::filter::LevelFilter::current(),
-        ));
+        rebuild_after_update();
 
         Ok(())
     }
@@ -257,23 +286,17 @@ impl<L, S> ArcSwapHandle<L, S> {
     where
         L: Clone,
     {
-        let shared = self.shared.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
+        let shared = self.upgrade()?;
 
-        let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
+        {
+            let _guard = shared.modify_lock.lock().map_err(|_| Error::poisoned())?;
+            let current = shared.inner.load_full();
+            let mut next = (*current).clone();
+            f(&mut next);
+            shared.inner.store(Arc::new(next));
+        }
 
-        let current = shared.inner.load_full();
-        let mut next = (*current).clone();
-        f(&mut next);
-        shared.inner.store(Arc::new(next));
-
-        callsite::rebuild_interest_cache();
-
-        #[cfg(feature = "tracing-log")]
-        tracing_log::log::set_max_level(tracing_log::AsLog::as_log(
-            &tracing_subscriber::filter::LevelFilter::current(),
-        ));
+        rebuild_after_update();
 
         Ok(())
     }
@@ -300,9 +323,7 @@ impl<L, S> ArcSwapHandle<L, S> {
     /// Returns an error if the associated layer has been dropped.
     #[inline]
     pub fn with_current<T>(&self, f: impl FnOnce(&L) -> T) -> Result<T, Error> {
-        let shared = self.shared.upgrade().ok_or(Error {
-            kind: ErrorKind::SubscriberGone,
-        })?;
+        let shared = self.upgrade()?;
         let current = shared.inner.load();
         Ok(f(current.as_ref()))
     }

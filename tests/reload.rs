@@ -134,12 +134,31 @@ fn handle_returns_error_after_layer_dropped() {
     drop(reloadable);
 
     assert!(handle.clone_current().is_none());
-    assert!(handle.with_current(|f| *f).is_err());
-    assert!(
-        handle
-            .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
-            .is_err()
-    );
+    let err = handle.with_current(|f| *f).unwrap_err();
+    assert!(err.is_dropped());
+    assert!(!err.is_poisoned());
+
+    let err = handle
+        .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
+        .unwrap_err();
+    assert!(err.is_dropped());
+    assert!(!err.is_poisoned());
+}
+
+#[test]
+fn handle_returns_poisoned_error_after_panic() {
+    let (_reloadable, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = handle.modify(|_| panic!("intentional panic inside modify"));
+    }));
+
+    let err = handle
+        .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
+        .unwrap_err();
+    assert!(err.is_poisoned());
+    assert!(!err.is_dropped());
 }
 
 #[test]
