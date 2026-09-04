@@ -1,6 +1,6 @@
 [package]
 name = "tracing-subscriber-reload-arcswap"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 # Rust 1.88 is needed for criterion 0.8 / gimli 0.33
 rust-version = "1.88.0"
