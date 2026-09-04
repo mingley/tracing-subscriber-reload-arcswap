@@ -2,38 +2,64 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [ master ]
   pull_request:
+    branches: [ master ]
 
-permissions:
-  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test (stable)
+  deny:
+    name: Cargo Deny Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features
+
+  lint:
+    name: Format and Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.98.0
           components: rustfmt, clippy
 
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Fmt
+      - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
-      - name: Clippy
+      - name: Run cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all-features
-
-      - name: Doc
+      - name: Run cargo doc
+        run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        toolchain: [1.98.0, 1.88.0]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Run cargo test
+        run: cargo test --all-features
 

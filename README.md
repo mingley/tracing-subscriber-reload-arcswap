@@ -1,5 +1,10 @@
 # tracing-subscriber-reload-arcswap
 
+[![Crates.io](https://img.shields.io/crates/v/tracing-subscriber-reload-arcswap.svg)](https://crates.io/crates/tracing-subscriber-reload-arcswap)
+[![Documentation](https://docs.rs/tracing-subscriber-reload-arcswap/badge.svg)](https://docs.rs/tracing-subscriber-reload-arcswap)
+[![CI](https://github.com/mingley/tracing-subscriber-reload-arcswap/actions/workflows/ci.yml/badge.svg)](https://github.com/mingley/tracing-subscriber-reload-arcswap/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 This crate exists because the `tracing-subscriber` maintainers asked that an `arc-swap`-based
 reload layer be split out into a separate crate rather than adding a new feature to
 `tracing-subscriber`.

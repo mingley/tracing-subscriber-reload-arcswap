@@ -100,3 +100,52 @@ fn reload_updates_filter_behavior() {
         "output was: {output}"
     );
 }
+
+#[test]
+fn handle_inspection_and_modify() {
+    let (_reloadable, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+
+    assert_eq!(
+        handle.clone_current(),
+        Some(tracing_subscriber::filter::LevelFilter::INFO)
+    );
+    assert_eq!(
+        handle.with_current(|f| *f).unwrap(),
+        tracing_subscriber::filter::LevelFilter::INFO
+    );
+
+    handle
+        .modify(|f| *f = tracing_subscriber::filter::LevelFilter::TRACE)
+        .unwrap();
+
+    assert_eq!(
+        handle.clone_current(),
+        Some(tracing_subscriber::filter::LevelFilter::TRACE)
+    );
+}
+
+#[test]
+fn handle_returns_error_after_layer_dropped() {
+    let (reloadable, handle) =
+        ArcSwapLayer::<_, TestSubscriber>::new(tracing_subscriber::filter::LevelFilter::INFO);
+
+    assert!(handle.clone_current().is_some());
+    drop(reloadable);
+
+    assert!(handle.clone_current().is_none());
+    assert!(handle.with_current(|f| *f).is_err());
+    assert!(
+        handle
+            .reload(tracing_subscriber::filter::LevelFilter::DEBUG)
+            .is_err()
+    );
+}
+
+#[test]
+fn layer_default_constructs_default_inner() {
+    let layer = ArcSwapLayer::<String, TestSubscriber>::default();
+    let handle = layer.handle();
+    assert_eq!(handle.clone_current(), Some(String::new()));
+    drop(layer);
+}
